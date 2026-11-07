@@ -22,11 +22,15 @@
 1. 点页面上方 **Code → Download ZIP**
 2. 解压，进入 `mesugaki-lite-pet-*` 文件夹
 3. 双击 **`setup.cmd`** —— 自动从 Electron 官方下载运行时（约 151MB，只需一次）
-4. 双击 **`Start.cmd`** 启动
+4. 双击 **`启动桌宠.vbs`** 启动（**不留黑控制台**）；想要调试信息就用 `Start.cmd`
 
 不需要装 Node.js。网络不方便时，手动下载
 [Electron 45.2.3 win32-x64](https://github.com/electron/electron/releases/download/v45.2.3/electron-v45.2.3-win32-x64.zip)
 并解压到 `runtime\` 目录即可，效果一样。
+
+> **启动不了？** 双击 **`重置配置.cmd`** 清掉 `%APPDATA%\mesugaki-lite` 再试。
+> 常见原因是上次强制结束进程后配置目录被写坏，或环境里残留了 `ELECTRON_RUN_AS_NODE`
+> （那会让 electron 当成 node 跑，报 `Cannot find module 'electron'`）。
 
 ### 方式二：git clone
 
@@ -35,7 +39,7 @@ git clone https://github.com/MSaknussemm/mesugaki-lite-pet
 cd mesugaki-lite-pet
 ```
 
-然后同样双击 **`setup.cmd`** → **`Start.cmd`**。
+然后同样双击 **`setup.cmd`** → **`启动桌宠.vbs`**。
 
 ### 方式三：开发者
 
