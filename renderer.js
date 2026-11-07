@@ -22,8 +22,12 @@ document.addEventListener('wheel',e=>{
 // Transparent padding, hair-edge fringes and the surrounding desktop cannot start a drag.
 const hitCanvas=document.createElement('canvas');hitCanvas.width=3;hitCanvas.height=3;
 const hitContext=hitCanvas.getContext('2d',{willReadFrequently:true});
+function fallbackHit(x,y){
+ const w=innerWidth,h=innerHeight,cx=w*0.51,cy=h*0.84,rx=Math.max(30,w*0.10),ry=Math.max(36,h*0.12);
+ const dx=(x-cx)/rx,dy=(y-cy)/ry;return dx*dx+dy*dy<=1;
+}
 function hitCharacter(x,y){
- if(!hitContext||video.readyState<2||!video.videoWidth||!video.videoHeight)return false;
+ if(!hitContext||video.readyState<2||!video.videoWidth||!video.videoHeight)return fallbackHit(x,y);
  const r=video.getBoundingClientRect();
  if(!r.width||!r.height)return false;
  const u=(x-r.left)/r.width,v=(y-r.top)/r.height;
@@ -34,7 +38,7 @@ function hitCharacter(x,y){
   const pixels=hitContext.getImageData(0,0,3,3).data;
   for(let i=3;i<pixels.length;i+=4)if(pixels[i]<160)return false;
   return true;
- }catch(e){return false;}
+ }catch(e){return fallbackHit(x,y);}
 }
 // Native pass-through follows current pixels even when the animation moves under a stationary mouse.
 let pointer={x:-1,y:-1},lastInteractive=null;

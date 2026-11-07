@@ -36,7 +36,7 @@ else app.whenReady().then(()=>{
   let raw='',size=0;req.on('data',chunk=>{size+=chunk.length;if(size>8192) req.destroy();else raw+=chunk;});
   req.on('end',()=>{try {const msg=normalize(JSON.parse(raw),config);if(busy||queue.length)return send(429,{error:'正在说，说完再发'});enqueue(msg);send(202,{ok:true});}catch(e){send(400,{error:e.message});}});
  });
- server.on('error',e=>{serverError=e.message;try{fs.appendFileSync(path.join(root,'pet.log'),new Date().toISOString()+' server error: '+e.message+'\n');}catch(x){}});server.listen(config.port,'127.0.0.1');scheduleIdle();
+ server.on('error',e=>{serverError=e.message;logPet('server error: '+e.message);try{if(tray&&tray.displayBalloon)tray.displayBalloon({iconType:'warning',title:'鲸鱼娘桌宠',content:'端口 '+config.port+' 被占用，台词接口不可用'});}catch(x){}});server.listen(config.port,'127.0.0.1');scheduleIdle();
  const tails=['mp_log.txt','bot_log.txt'].map(f=>new Tail(path.join(gameDir,f)));
  function processLine(line,backfill){
   const sm=line.match(/^SESSION .*session=([0-9A-Fa-f]+)/);if(sm){lastSession=sm[1]+'#'+(++sessionSeq);return;}

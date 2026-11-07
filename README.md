@@ -28,9 +28,13 @@
 [Electron 45.2.3 win32-x64](https://github.com/electron/electron/releases/download/v45.2.3/electron-v45.2.3-win32-x64.zip)
 并解压到 `runtime\` 目录即可，效果一样。
 
-> **启动不了？** 双击 **`重置配置.cmd`** 清掉 `%APPDATA%\mesugaki-lite` 再试。
+> **启动不了？** 先双击 **`自检.cmd`**：它会逐项检查 runtime、6 段动画、配置、端口、游戏数据、配置目录权限，直接告诉你哪坏了。
+> 如果只是窗口位置/缓存坏了，双击 **`重置配置.cmd`** 清掉 `%APPDATA%\mesugaki-lite` 再试。
 > 常见原因是上次强制结束进程后配置目录被写坏，或环境里残留了 `ELECTRON_RUN_AS_NODE`
 > （那会让 electron 当成 node 跑，报 `Cannot find module 'electron'`）。
+
+> **接游戏**：`config.json` 的 `game_dir` 默认是 `game`（程序同级的 `game` 文件夹）。
+> 把联机版的 `mp_log.txt` / `bot_log.txt` 目录放过去，或者右键托盘「选择游戏目录」改到实际位置。
 
 ### 方式二：git clone
 

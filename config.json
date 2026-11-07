@@ -1,6 +1,6 @@
 {
   "port": 17837,
-  "game_dir": "..\\game",
+  "game_dir": "game",
   "animations": {
     "idle": "assets/idle.webm",
     "talk": "assets/talk.webm",

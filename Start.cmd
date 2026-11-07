@@ -1,14 +1,9 @@
 @echo off
 cd /d "%~dp0"
 if not exist "runtime\electron.exe" (
-  echo [setup] runtime\electron.exe ä¸å­˜åœ¨ï¼Œå…ˆä¸‹è½½ Electron è¿è¡Œæ—¶...
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
-  if not exist "runtime\electron.exe" (
-    echo.
-    echo [error] è¿è¡Œæ—¶æ²¡æœ‰å°±ç»ªï¼Œè¯·æ‰‹åŠ¨åŒå‡» setup.cmd é‡è¯•ã€‚
-    pause
-    exit /b 1
-  )
+  echo [%date% %time%] runtime\electron.exe missing >> "%~dp0..\pet.log"
+  mshta "javascript:alert('×À³èÔËĞĞÊ±È±Ê§£º\npet\\runtime\\electron.exe\n\n¿ÉÄÜ±»É±¶¾Èí¼ş¸ôÀë»ò½âÑ¹²»ÍêÕû¡£\nÇëÖØĞÂ½âÑ¹£¬»ò°Ñ¸ÃÎÄ¼ş¼ÓÈë°×Ãûµ¥¡£');close()"
+  exit /b 1
 )
 set ELECTRON_RUN_AS_NODE=
 start "" "runtime\electron.exe" "%~dp0."
