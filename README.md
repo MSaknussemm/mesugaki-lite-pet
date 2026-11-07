@@ -16,17 +16,26 @@
 
 ## 快速开始
 
-### 方式一：自己装 Electron（推荐）
+### 方式一：下载 zip 直接用（推荐给普通用户）
+
+去 [Releases](../../releases) 下载 `mesugaki-lite-pet-v1.0.0-win64.zip`，解压到任意目录，双击 **`Start.cmd`**。
+运行时已经打包在里面，不用装 Node.js。
+
+### 方式二：克隆后自动下载运行时
+
+```bash
+git clone https://github.com/MSaknussemm/mesugaki-lite-pet
+cd mesugaki-lite-pet
+```
+
+双击 **`setup.cmd`**（会从官方 GitHub 下载 Electron 45.2.3，约 151MB，只需一次），完成后双击 **`Start.cmd`**。
+
+### 方式三：开发者
 
 ```bash
 npm install
 npm start
 ```
-
-### 方式二：用现成运行时
-
-本仓库**不打包 Electron 运行时**。把 Electron 的 `win32-x64` 解压到 `runtime/`，然后双击 `Start.cmd`。
-（本机验证版本：Electron 45.2.3）
 
 ### 接游戏日志
 
