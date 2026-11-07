@@ -16,19 +16,25 @@
 
 ## 快速开始
 
-### 方式一：下载 zip 直接用（推荐给普通用户）
+### 方式一：下载源码 zip（推荐，最省事）
 
-去 [Releases](../../releases) 下载 `mesugaki-lite-pet-v1.0.0-win64.zip`，解压到任意目录，双击 **`Start.cmd`**。
-运行时已经打包在里面，不用装 Node.js。
+1. 点页面上方 **Code → Download ZIP**
+2. 解压，进入 `mesugaki-lite-pet-*` 文件夹
+3. 双击 **`setup.cmd`** —— 自动从 Electron 官方下载运行时（约 151MB，只需一次）
+4. 双击 **`Start.cmd`** 启动
 
-### 方式二：克隆后自动下载运行时
+不需要装 Node.js。网络不方便时，手动下载
+[Electron 45.2.3 win32-x64](https://github.com/electron/electron/releases/download/v45.2.3/electron-v45.2.3-win32-x64.zip)
+并解压到 `runtime\` 目录即可，效果一样。
+
+### 方式二：git clone
 
 ```bash
 git clone https://github.com/MSaknussemm/mesugaki-lite-pet
 cd mesugaki-lite-pet
 ```
 
-双击 **`setup.cmd`**（会从官方 GitHub 下载 Electron 45.2.3，约 151MB，只需一次），完成后双击 **`Start.cmd`**。
+然后同样双击 **`setup.cmd`** → **`Start.cmd`**。
 
 ### 方式三：开发者
 
