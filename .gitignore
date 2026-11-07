@@ -1,0 +1,22 @@
+# 不打包 Electron 运行时（约 350MB）与本地日志
+runtime/
+node_modules/
+dist/
+
+# 绝对不提交：游戏本体数据与编译产物
+*.dat
+*.exe
+*.pdb
+*.map
+build/
+th07*
+!th07*.patch
+
+# 运行期日志
+*.log
+mp_log.txt
+bot_log.txt
+
+# 本地配置残留
+.DS_Store
+Thumbs.db

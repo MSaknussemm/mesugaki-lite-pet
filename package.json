@@ -1,0 +1,14 @@
+{
+  "name": "mesugaki-lite-pet",
+  "version": "1.0.0",
+  "description": "Transparent Electron desktop pet that reacts to Touhou 7 co-op mod logs (whale-girl, tsundere).",
+  "main": "main.js",
+  "license": "MIT",
+  "author": "MSaknussemm",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^45.2.3"
+  }
+}

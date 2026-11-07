@@ -1,0 +1,889 @@
+diff --git a/src/th07/Coop.cpp b/src/th07/Coop.cpp
+index deef9e2..faf0940 100644
+--- a/src/th07/Coop.cpp
++++ b/src/th07/Coop.cpp
+@@ -30,6 +30,23 @@ void CoopLog(const char *format, ...)
+     g_CoopLogSink(line);
+ }
+ 
++// Pet events describe transitions only; these helpers never alter game state.
++void CoopLogPowerChange(i32 seat, f32 before)
++{
++    const f32 after = g_GameManager.Power(seat);
++    if (before < 128.0f && after >= 128.0f)
++        CoopLog("POWER_FULL seat=%d power=%d", seat, (i32)after);
++    if (before >= 32.0f && after < 32.0f)
++        CoopLog("POWER_LOW seat=%d power=%d", seat, (i32)after);
++}
++
++void CoopLogSpellFailure(const char *reason, i32 seat)
++{
++    if (g_EnemyManager.spellcardInfo.isActive && g_EnemyManager.spellcardInfo.isCapturing)
++        CoopLog("SPELL_FAILED stage=%d spell=%d seat=%d reason=%s", g_GameManager.currentStage,
++                g_EnemyManager.spellcardInfo.spellcardIdx, seat, reason);
++}
++
+ Player *SeatPlayer(i32 seat)
+ {
+     return &g_Players[seat >= 0 && seat < MAX_PLAYERS ? seat : 0];
+@@ -149,8 +166,8 @@ i32 CoopScaleDamage(Enemy *enemy, i32 damage)
+     i32 boss = enemy->isBoss != 0;
+     // By seats (2..4), boss / other
+     static const i32 percent[3][2] = {
+-        {100, 75},
+-        {75, 66},
++        {100, 100},
++        {75, 75},
+         {66, 50},
+     };
+     i32 p = percent[(count > 4 ? 4 : count) - 2][boss];
+diff --git a/src/th07/Coop.hpp b/src/th07/Coop.hpp
+index 596ae0a..ecbce73 100644
+--- a/src/th07/Coop.hpp
++++ b/src/th07/Coop.hpp
+@@ -65,6 +65,8 @@ extern i32 g_CoopTestStageClearFrame;
+ extern i32 g_CoopTestStageClearLast;
+ 
+ void CoopLog(const char *format, ...);
++void CoopLogPowerChange(i32 seat, f32 before);
++void CoopLogSpellFailure(const char *reason, i32 seat);
+ extern void (*g_CoopLogSink)(const char *line);
+ 
+ // Nonzero while the frame may still be undone by a rollback.
+diff --git a/src/th07/CoopPlayers.cpp b/src/th07/CoopPlayers.cpp
+index 266f111..630faf6 100644
+--- a/src/th07/CoopPlayers.cpp
++++ b/src/th07/CoopPlayers.cpp
+@@ -55,7 +55,7 @@ i32 CoopBecomeGhost(Player *player)
+     player->playerSprite.blendMode = 0;
+     g_AnmManager->SetAnmIdxAndExecuteScript(&player->playerSprite, 1024 + player->AnmShift());
+     SetPlayerPosition(player, GhostColumn(player->seat), 400.0f);
+-    CoopLog("GHOST player=%d", player->seat);
++    if (!g_FrameMayRollBack) CoopLog("GHOST player=%d", player->seat);
+     return 1;
+ }
+ 
+@@ -68,6 +68,21 @@ void CoopStepGhost(Player *player)
+         t = -t;
+     }
+     player->invulnerabilityTimer++;
++    // After a short ghost window, a teammate with spare lives revives us.
++    if (player->seat == 0 && t >= 60)
++    {
++        for (i32 other = 0; other < PlayerCount(); other++)
++        {
++            if (other == 0) continue;
++            Player *mate = &g_Players[other];
++            if (IsGhost(mate)) continue;
++            if ((i32)g_GameManager.Lives(other) <= 1) continue;
++            g_GameManager.AddSeatStock(g_GameManager.Lives(other), -1);
++            CoopReviveGhost(player);
++            if (!g_FrameMayRollBack) CoopLog("AUTO_REVIVE by=%d", other);
++            return;
++        }
++    }
+     f32 phase = (f32)(t % 120) * (ZUN_PI * 2.0f / 120.0f);
+     SetPlayerPosition(player, GhostColumn(player->seat), 400.0f + sinf(phase) * 6.0f);
+ }
+@@ -92,7 +107,7 @@ void CoopReviveGhost(Player *player)
+     player->positionCenter.x = g_GameManager.arcadeRegionSize.x / 2.0f;
+     player->positionCenter.y = g_GameManager.arcadeRegionSize.y - 64.0f;
+     player->positionCenter.z = 0.2f;
+-    player->invulnerabilityTimer = 0;
++    player->invulnerabilityTimer = 120;
+     player->playerSprite.scale.x = 3.0f;
+     player->playerSprite.scale.y = 3.0f;
+     g_AnmManager->SetAnmIdxAndExecuteScript(&player->playerSprite, 1024 + player->AnmShift());
+@@ -103,7 +118,7 @@ void CoopReviveGhost(Player *player)
+     g_Gui.lifeDisplayUpdateFrames = 2;
+     g_Gui.bombDisplayUpdateFrames = 2;
+     g_Gui.powerDisplayUpdateFrames = 2;
+-    CoopLog("GHOST_REVIVE player=%d", seat);
++    if (!g_FrameMayRollBack) CoopLog("GHOST_REVIVE player=%d", seat);
+ }
+ 
+ void CoopExtendFromPoints()
+@@ -271,7 +286,7 @@ static void UpdatePowerTransfer(Player *giver)
+     g_GameManager.AddSeatStock(power, -amount);
+     g_Gui.powerDisplayUpdateFrames = 2;
+     g_SoundPlayer.PlaySoundByIdx(SOUND_POWERUP, 0);
+-    CoopLog("POWER_GIVE from=%d to=%d amount=%d", giver->seat, receiver->seat, amount);
++    if (!g_FrameMayRollBack) CoopLog("POWER_GIVE from=%d to=%d amount=%d", giver->seat, receiver->seat, amount);
+ }
+ 
+ static void UpdateLifeTransfer(Player *giver)
+@@ -321,7 +336,7 @@ static void UpdateLifeTransfer(Player *giver)
+     }
+     g_Gui.lifeDisplayUpdateFrames = 2;
+     g_SoundPlayer.PlaySoundByIdx(SOUND_EXTEND, 0);
+-    CoopLog("LIFE_GIVE from=%d to=%d", giver->seat, receiver->seat);
++    if (!g_FrameMayRollBack) CoopLog("LIFE_GIVE from=%d to=%d", giver->seat, receiver->seat);
+ }
+ 
+ void CoopUpdateTransfers(Player *player)
+diff --git a/src/th07/EclManager.cpp b/src/th07/EclManager.cpp
+index 14c1b56..f9417d6 100644
+--- a/src/th07/EclManager.cpp
++++ b/src/th07/EclManager.cpp
+@@ -683,6 +683,8 @@ void EclManager::BeginSpellcard(Enemy *enemy, EclRawInstr *instr)
+     g_EnemyManager.spellcardInfo.isCapturing = 1;
+     g_EnemyManager.spellcardInfo.spellcardIdx =
+         instr->args[0].us[1];
++    CoopLog("SPELL_START stage=%d spell=%d", g_GameManager.currentStage,
++            g_EnemyManager.spellcardInfo.spellcardIdx);
+     g_EnemyManager.spellcardInfo.captureScore =
+         g_SpellcardScore[g_EnemyManager.spellcardInfo.spellcardIdx];
+     g_EnemyManager.spellcardInfo.grazeBonusScore = 0;
+@@ -1507,6 +1509,8 @@ restart:
+             case ECL_SET_BOSS:
+                 if (GET_INT_VALUE(enemy, 0) >= 0)
+                 {
++                    if (!enemy->isBoss)
++                        CoopLog("BOSS_ENTER stage=%d boss=%d", g_GameManager.currentStage, GET_INT_VALUE(enemy, 0));
+                     g_EnemyManager.bosses[GET_INT_VALUE(enemy, 0)] = enemy;
+                     g_Gui.bossPresent = 1;
+                     g_Gui.bossHealthBar = 1.0f;
+diff --git a/src/th07/EnemyManager.cpp b/src/th07/EnemyManager.cpp
+index a4c5171..4aa4b22 100644
+--- a/src/th07/EnemyManager.cpp
++++ b/src/th07/EnemyManager.cpp
+@@ -475,6 +475,7 @@ i32 Enemy::HandleTimerCallback()
+         if (!this->isSurvivalSpellcard)
+         {
+             g_EnemyManager.spellcardInfo.captureScore = 0;
++            CoopLogSpellFailure("timeout", -1);
+             g_EnemyManager.spellcardInfo.isCapturing = 0;
+             if (g_EnemyManager.spellcardInfo.isActive)
+             {
+diff --git a/src/th07/GameErrorContext.hpp b/src/th07/GameErrorContext.hpp
+index fbfc8a2..67e76f2 100644
+--- a/src/th07/GameErrorContext.hpp
++++ b/src/th07/GameErrorContext.hpp
+@@ -27,14 +27,14 @@ struct GameErrorContext
+         {
+             // STRING: TH07 0x00497c7c
+             this->Log("---------------------------------------------------------- \r\n");
++            // STRING: TH07 0x00497c6c
++            FileSystem::WriteDataToFile("./log.txt", this->m_Buffer,
++                                        strlen(this->m_Buffer));
+             if (this->m_ShowMessageBox)
+             {
+                 // STRING: TH07 0x00497c78
+                 MessageBoxA(NULL, this->m_Buffer, "log", MB_ICONERROR);
+             }
+-            // STRING: TH07 0x00497c6c
+-            FileSystem::WriteDataToFile("./log.txt", this->m_Buffer,
+-                                        strlen(this->m_Buffer));
+         }
+     }
+ };
+diff --git a/src/th07/GameManager.cpp b/src/th07/GameManager.cpp
+index c77e15b..518d35f 100644
+--- a/src/th07/GameManager.cpp
++++ b/src/th07/GameManager.cpp
+@@ -2,6 +2,8 @@
+ #include "multi/ReplaySession.h"
+ 
+ #include <stdio.h>
++#include <stdlib.h>
++#include "Coop.hpp"
+ 
+ #include "AnmManager.hpp"
+ #include "AsciiManager.hpp"
+@@ -133,6 +135,7 @@ u32 GameManager::OnUpdate(GameManager *arg)
+         (arg->slowModeSlowActive == 0 && WAS_PRESSED_RAW(TH_BUTTON_MENU)))
+     {
+         arg->isInPauseMenu = 1;
++        if (!g_FrameMayRollBack) CoopLog("PAUSE");
+         g_GameManager.arcadeRegionTopLeftPos.x = 32.0f;
+         g_GameManager.arcadeRegionTopLeftPos.y = 16.0f;
+         g_GameManager.arcadeRegionSize.x = 384.0f;
+@@ -570,9 +573,26 @@ ZunResult GameManager::AddedCallback(GameManager *arg)
+             }
+         }
+         // Test hook (TH07_MP_TEST_START_STAGE).
+-        if (g_CoopTestStartStage > 1 && arg->currentStage == 0 && !arg->practice && arg->difficulty < 4)
++        if (g_CoopTestStartStage > 1 && arg->currentStage == 0 && !arg->practice)
+         {
+-            arg->currentStage = g_CoopTestStartStage - 1;
++            char diffText[8] = {};
++            if (GetEnvironmentVariableA("TH07_MP_TEST_DIFFICULTY", diffText, sizeof(diffText)) > 0)
++            {
++                i32 testDifficulty = atoi(diffText);
++                if (testDifficulty >= 0 && testDifficulty <= 3)
++                {
++                    arg->difficulty = testDifficulty;
++                }
++            }
++            if (g_CoopTestStartStage >= 7)
++            {
++                arg->difficulty = 4;
++                arg->currentStage = g_CoopTestStartStage - 1;
++            }
++            else if (arg->difficulty < 4)
++            {
++                arg->currentStage = g_CoopTestStartStage - 1;
++            }
+         }
+         for (i32 seat = 0; seat < MAX_PLAYERS; seat++)
+         {
+diff --git a/src/th07/GameWindow.cpp b/src/th07/GameWindow.cpp
+index d0ebd50..f41f083 100644
+--- a/src/th07/GameWindow.cpp
++++ b/src/th07/GameWindow.cpp
+@@ -394,6 +394,10 @@ i32 GameWindow::InitD3dRendering()
+ 
+     usingD3dHal = true;
+     memset(&presentParams, 0, sizeof(D3DPRESENT_PARAMETERS));
++    // BUGFIX: windowed mode skipped the 255 ("auto") branch below, so 255 reached
++    // MainMenu (255 + 23 > vmCount 164) and wrote past vmHead[].
++    if (g_Supervisor.cfg.windowed && g_Supervisor.cfg.colorMode16bit == 255)
++        g_Supervisor.cfg.colorMode16bit = 0;
+     g_Supervisor.d3dIface->GetAdapterDisplayMode(0, &displayMode);
+     if (!g_Supervisor.cfg.windowed)
+     {
+diff --git a/src/th07/Gui.cpp b/src/th07/Gui.cpp
+index 76ba2d6..529216b 100644
+--- a/src/th07/Gui.cpp
++++ b/src/th07/Gui.cpp
+@@ -906,6 +906,8 @@ ZunResult GuiImpl::RunMsg()
+             }
+             break;
+         case MSG_DIALOGUE:
++            if (this->msg.dialogueLines[0].anmFileIdx < 0 && this->msg.dialogueLines[1].anmFileIdx < 0)
++                CoopLog("DIALOGUE_START stage=%d message=%d", g_GameManager.currentStage, this->msg.currentMsgIdx);
+             args = &this->msg.curInstr->args;
+             if (args->dialogue.textLine == 0 &&
+                 this->msg.dialogueLines[1].anmFileIdx >= 0)
+@@ -999,6 +1001,7 @@ ZunResult GuiImpl::RunMsg()
+             this->msg.framesElapsedDuringPause = 0;
+             break;
+         case MSG_STAGERESULTS:
++            CoopLog("STAGE_CLEAR stage=%d", g_GameManager.currentStage);
+             this->clearPower = g_GameManager.Power(0);
+             this->clearPointItems =
+                 g_GameManager.globals->pointItemsCollectedThisStage;
+diff --git a/src/th07/ItemManager.cpp b/src/th07/ItemManager.cpp
+index 2e468f3..ce5dc1b 100644
+--- a/src/th07/ItemManager.cpp
++++ b/src/th07/ItemManager.cpp
+@@ -251,6 +251,7 @@ void ItemManager::OnUpdate()
+     check_collision:
+         if (item->state != 3 && player->CalcItemBoxCollision(&item->currentPosition, &local_20))
+         {
++            const f32 powerBefore = g_GameManager.Power(player->seat);
+             if (item->transfer)
+                 CoopLog("TRANSFER_PICKUP to=%d type=%d", player->seat, item->itemType);
+             g_ReplayManager->replayEventFlags |= 0x40;
+@@ -425,6 +426,7 @@ void ItemManager::OnUpdate()
+                 }
+                 break;
+             case ITEM_BOMB:
++                CoopLog("ITEM_BOMB seat=%d", player->seat);
+                 if ((i32)g_GameManager.Bombs(player->seat) < 8)
+                 {
+                     g_GameManager.AddSeatStock(g_GameManager.Bombs(player->seat), 1);
+@@ -433,6 +435,7 @@ void ItemManager::OnUpdate()
+                 g_GameManager.IncreaseSubrank(5);
+                 break;
+             case ITEM_LIFE:
++                CoopLog("ITEM_LIFE seat=%d", player->seat);
+                 g_GameManager.ExtendSeat(player->seat);
+                 break;
+             case ITEM_FULL_POWER:
+@@ -520,6 +523,7 @@ void ItemManager::OnUpdate()
+                 g_GameManager.AddCherryPlus(itemScore);
+                 break;
+             }
++            CoopLogPowerChange(player->seat, powerBefore);
+             item->isInUse = 0;
+             itemAcquired = 1;
+             continue;
+diff --git a/src/th07/MainMenu.cpp b/src/th07/MainMenu.cpp
+index 555c9b9..68b54c9 100644
+--- a/src/th07/MainMenu.cpp
++++ b/src/th07/MainMenu.cpp
+@@ -531,7 +531,7 @@ u32 MainMenu::OnUpdateOptionsMenu()
+         g_AnmManager->SetActiveSprite(&this->vmHead[i],
+                                       this->vmHead[i].baseSpriteIdx + 1);
+     }
+-    i = g_Supervisor.cfg.colorMode16bit + 23;
++    i = (g_Supervisor.cfg.colorMode16bit < 2 ? g_Supervisor.cfg.colorMode16bit : 0) + 23;
+     g_AnmManager->SetActiveSprite(
+         &this->vmHead[i],
+         (i32)this->vmHead[i].baseSpriteIdx);
+diff --git a/src/th07/Player.cpp b/src/th07/Player.cpp
+index 8418f1c..8d81830 100644
+--- a/src/th07/Player.cpp
++++ b/src/th07/Player.cpp
+@@ -1211,6 +1211,11 @@ void Player::ScoreGraze(Float3 *param_1)
+         if (g_GameManager.globals->grazeInTotal < 999999)
+         {
+             g_GameManager.globals->grazeInTotal++;
++            const i32 total = g_GameManager.globals->grazeInTotal;
++            if (total == 100 || total == 500 || total == 1000 || total == 2000 || total == 5000)
++            {
++                if (!g_FrameMayRollBack) CoopLog("GRAZE_MILESTONE seat=%d total=%d", this->seat, total);
++            }
+         }
+     }
+     grazePos = (this->positionCenter + *param_1) / 2.0f;
+@@ -1258,6 +1263,8 @@ void Player::Die()
+     g_EffectManager.SpawnPlayerEffect(12, &this->positionCenter, 3, this->seat, 0xff4040ff);
+     g_EffectManager.SpawnEffect(6, &this->positionCenter, 16, 0xffffffff);
+     this->playerState = PLAYER_STATE_DEAD;
++    CoopLog("PLAYER_HIT seat=%d frame=%d lives=%d", this->seat, g_GameManager.framesThisStage,
++            (i32)g_GameManager.Lives(this->seat));
+     this->invulnerabilityTimer = 0;
+     // The sound plays once the frame is final (RollbackGame.cpp).
+     this->hitSounds++;
+@@ -1761,6 +1768,7 @@ void Player::UpdateBorderAndBombState()
+                 this->bombInfo.isFocus = (i32)this->isFocus;
+                 this->bombInfo.isInUse = 1;
+                 this->isBombing = 1;
++                if (!g_FrameMayRollBack) CoopLog("PLAYER_BOMB seat=%d frame=%d", this->seat, g_GameManager.framesThisStage);
+                 this->bombInfo.bombTimer = 0;
+                 this->bombInfo.bombDuration = 999;
+                 if (!this->bombInfo.isFocus)
+@@ -1772,6 +1780,7 @@ void Player::UpdateBorderAndBombState()
+                     this->bombInfo.bombFocusCalc(this);
+                 }
+                 g_EnemyManager.spellcardInfo.captureScore = 0;
++                CoopLogSpellFailure("player_action", this->seat);
+                 g_EnemyManager.spellcardInfo.isCapturing = 0;
+                 g_GameManager.DecreaseSubrankForPlayer(200);
+                 g_EnemyManager.spellcardInfo.usedBomb =
+@@ -1806,9 +1815,12 @@ i32 Player::UpdateDeath()
+         this->respawnTimer--;
+         if (this->respawnTimer == 0)
+         {
++            if (!g_FrameMayRollBack) CoopLog("PLAYER_DIE seat=%d frame=%d lives=%d", this->seat, g_GameManager.framesThisStage,
++                    (i32)g_GameManager.Lives(this->seat));
+             g_ReplayManager->replayEventFlags |= 4;
+             g_GameManager.PowerItemCount(this->seat) = 0;
+             g_EnemyManager.spellcardInfo.captureScore = 0;
++            CoopLogSpellFailure("player_action", this->seat);
+             g_EnemyManager.spellcardInfo.isCapturing = 0;
+             g_GameManager.AddSeatStock(g_GameManager.Deaths(this->seat), 1);
+             if ((i32)g_GameManager.Lives(this->seat) > 0)
+@@ -1895,6 +1907,7 @@ i32 Player::UpdateDeath()
+                     return 0;
+                 }
+                 g_GameManager.isInRetryMenu = 1;
++                CoopLog("GAME_OVER stage=%d", g_GameManager.currentStage);
+             }
+             else
+             {
+@@ -2206,6 +2219,7 @@ void Player::BreakBorderLocal(u32 unused)
+     effect->vm.intVars1[0] = 30;
+     this->borderEffect = effect;
+     g_EnemyManager.spellcardInfo.captureScore = 0;
++    CoopLogSpellFailure("player_action", this->seat);
+     g_EnemyManager.spellcardInfo.isCapturing = 0;
+     this->hasBorder = BORDER_NONE;
+     this->playerState = PLAYER_STATE_INVULNERABLE;
+@@ -2267,7 +2281,9 @@ u32 Player::OnUpdate(Player *arg)
+         return CHAIN_CALLBACK_RESULT_CONTINUE;
+     }
+     g_CoopActiveSeat = arg->seat;
++    const f32 powerBefore = g_GameManager.Power(arg->seat);
+     Player::OnUpdateSeat(arg);
++    CoopLogPowerChange(arg->seat, powerBefore);
+     g_CoopActiveSeat = 0;
+     return CHAIN_CALLBACK_RESULT_CONTINUE;
+ }
+diff --git a/src/th07/Supervisor.cpp b/src/th07/Supervisor.cpp
+index fba2f93..1399469 100644
+--- a/src/th07/Supervisor.cpp
++++ b/src/th07/Supervisor.cpp
+@@ -1124,7 +1124,7 @@ ZunResult Supervisor::LoadConfig(const char *configFilename)
+         }
+         if (!(g_Supervisor.cfg.lifeCount < 5 &&
+               g_Supervisor.cfg.bombCount < 4 &&
+-              g_Supervisor.cfg.colorMode16bit < 2 &&
++              (g_Supervisor.cfg.colorMode16bit < 2 || g_Supervisor.cfg.colorMode16bit == 255) &&
+               g_Supervisor.cfg.musicMode < 3 &&
+               g_Supervisor.cfg.defaultDifficulty < 6 &&
+               g_Supervisor.cfg.playSounds < 2 &&
+diff --git a/src/th07/main.cpp b/src/th07/main.cpp
+index 7ca4e86..6d3891d 100644
+--- a/src/th07/main.cpp
++++ b/src/th07/main.cpp
+@@ -39,6 +39,12 @@ void AnmManager::TakeScreenshotIfRequested()
+ 
+ #pragma var_order(d3dDeviceStatus, msg, res, i)
+ // FUNCTION: TH07 0x00434020
++static void DshTrace(const char* s)
++{
++    FILE* f = fopen("trace.txt", "a");
++    if (f) { fprintf(f, "%s\n", s); fclose(f); }
++}
++
+ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+                    LPSTR lpCmdline, i32 nCmdShow)
+ {
+@@ -47,6 +53,7 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+     tagMSG msg;
+ 
+     th07::mp::InstallCrashFilter();
++    DshTrace("enter");
+     th07::replay::ReadCommandLine();
+     {
+         th07::launcher::Selection launch = {};
+@@ -62,8 +69,11 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+             }
+         }
+     }
++    DshTrace("launcher_done");
+     if (!th07::replay::PreparePlayback()) return 1;
++    DshTrace("prepare_done");
+     MpInitSession();
++    DshTrace("session_done");
+ 
+     res = RENDER_RESULT_KEEP_RUNNING;
+     g_Supervisor.hInstance = hInstance;
+@@ -82,6 +92,7 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+     }
+ 
+     // STRING: TH07 0x00497c60
++    DshTrace("instance_ok");
+     if (g_Supervisor.LoadConfig("th07.cfg") != ZUN_SUCCESS)
+     {
+         goto stop;
+@@ -93,21 +104,25 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+     QueryPerformanceFrequency(&g_GameWindow.lpFrequency);
+ 
+ start:
++    DshTrace("pre_d3d");
+     if (GameWindow::InitD3dInterface())
+     {
+         goto stop;
+     }
+ 
++    DshTrace("d3d_iface_ok");
+     if (GameWindow::CreateGameWindow(hInstance))
+     {
+         goto stop;
+     }
+ 
++    DshTrace("window_ok");
+     if (GameWindow::InitD3dRendering())
+     {
+         goto stop;
+     }
+ 
++    DshTrace("render_ok");
+     g_SoundPlayer.InitializeDSound(g_GameWindow.window);
+     Controller::GetJoystickCaps();
+     Controller::ResetKeyboard();
+diff --git a/src/th07/multi/Bot.cpp b/src/th07/multi/Bot.cpp
+index 2ea6c88..fb11a90 100644
+--- a/src/th07/multi/Bot.cpp
++++ b/src/th07/multi/Bot.cpp
+@@ -1,4 +1,5 @@
+ ﻿#include "multi/Bot.h"
++#include "Coop.hpp"
+ 
+ #include "BulletManager.hpp"
+ #include "Controller.hpp"
+@@ -44,22 +45,22 @@ const unsigned short kFocus = TH_BUTTON_FOCUS;
+ // Sample t compares the player after t moves with hazards after t steps (the bot runs before
+ // the player and the bullets move).
+ 
+-const int kSamples = 9;
+-const int kSampleT[kSamples] = {0, 1, 2, 4, 8, 12, 18, 26, 34};
+-const int kGoalSample = 6;
++const int kSamples = 13;
++const int kSampleT[kSamples] = {0, 1, 2, 3, 4, 6, 8, 10, 13, 17, 22, 28, 34};
++const int kGoalSample = 8;
+ const int kHorizon = 34;
+-const unsigned kDecisionEvery = 8;
+-const float kReplanBelow = 10.0f;
+-const unsigned kMapEvery = 32;
++const unsigned kDecisionEvery = 1;
++const float kReplanBelow = 30.0f;
++const unsigned kMapEvery = 4;
+ 
+-const int kMaxCircles = 64;
+-const int kBulletCandidates = 64;
+-const int kMaxSegs = 48;
++const int kMaxCircles = 128;
++const int kBulletCandidates = 128;
++const int kMaxSegs = 96;
+ const int kMapBulletStride = 8;
+ const int kMaxMapBullets = (0x7d1 + kMapBulletStride - 1) / kMapBulletStride + 8;
+-const int kItemStride = 4;
+-const int kNearCap = 24;
+-const int kSegNearCap = 8;
++const int kItemStride = 1;
++const int kNearCap = 48;
++const int kSegNearCap = 16;
+ const int kMaxLead = 30;      // lockstep input delay
+ const int kHistory = 64;      // power of two
+ const int kLaserWarnAhead = 60;
+@@ -99,7 +100,7 @@ struct Seg {
+ const int kCell = 32;
+ const int kGridW = 12;
+ const int kGridH = 13;
+-const unsigned kCoarseEvery = 64;
++const unsigned kCoarseEvery = 8;
+ 
+ struct MapBullet {
+     float x, y, vx, vy, radius;
+@@ -188,6 +189,7 @@ unsigned long long g_logCycles;
+ 
+ void LogLine(const char* text)
+ {
++    if (g_FrameMayRollBack) return;
+     const unsigned long long begin = __rdtsc();
+     if (g_logState == 0) {
+         const DWORD n = GetEnvironmentVariableA("TH07_BOT_LOG", g_logPath, sizeof(g_logPath));
+@@ -801,13 +803,13 @@ struct Goal {
+ float ItemValue(int kind)
+ {
+     switch (kind) {
+-    case ITEM_LIFE: return 3.0f;
+-    case ITEM_BOMB: return 2.6f;
+-    case ITEM_FULL_POWER: return 2.2f;
+-    case ITEM_POWER_BIG: return 1.2f;
+-    case ITEM_POWER_SMALL: return 0.8f;
+-    case ITEM_CHERRY: return 0.6f;
+-    case ITEM_POINT: return 0.35f;
++    case ITEM_LIFE: return 5.0f;
++    case ITEM_BOMB: return 4.5f;
++    case ITEM_FULL_POWER: return 3.5f;
++    case ITEM_POWER_BIG: return 3.6f;
++    case ITEM_POWER_SMALL: return 3.0f;
++    case ITEM_CHERRY: return 2.6f;
++    case ITEM_POINT: return 3.8f;
+     default: return 0.2f;
+     }
+ }
+@@ -826,7 +828,7 @@ void CollectItems(const PlayerView& pl, int seat, Goal* g)
+             continue;
+         }
+         const float x = it.currentPosition.x, y = it.currentPosition.y;
+-        if (!Finite(x) || !Finite(y) || x <= kMinX || x >= kMaxX || y <= 16.0f || y >= pl.y - 8.0f) {
++        if (!Finite(x) || !Finite(y) || x <= kMinX || x >= kMaxX || y <= 16.0f || y >= pl.y + 100.0f) {
+             continue;
+         }
+         const float w = ItemValue(it.itemType);
+@@ -850,36 +852,39 @@ float CellPreference(float x, float y, const Goal& g, int seat)
+ {
+     float cost = 0.0f;
+     if (y < 400.0f) {
+-        cost += (400.0f - y) * 0.05f;
++        cost += (400.0f - y) * 0.005f;
+     } else if (y > 408.0f) {
+-        cost += (y - 408.0f) * 0.04f;
++        cost += (y - 408.0f) * 0.02f;
+     }
+     if (g.boss) {
+         if (y < 340.0f) {
+-            cost += (340.0f - y) * 0.25f;
++            cost += (340.0f - y) * 0.08f;
++        }
++        if (y > 320.0f && y < 400.0f) {
++            cost -= 0.60f * (1.0f - Abs(y - 350.0f) / 40.0f);
+         }
+         const float dx = x - g.bossX, dy = y - g.bossY;
+         const float d = sqrtf(dx * dx + dy * dy);
+         if (d < 220.0f) {
+-            cost += (220.0f - d) * 0.08f;
++            cost += (220.0f - d) * 0.01f;
+         }
+         if (d < 120.0f) {
+-            cost += (120.0f - d) * 0.3f;
++            cost += (120.0f - d) * 0.05f;
+         }
+     }
+     const float side = Abs(x - kMidX);
+     if (side > 150.0f) {
+-        cost += (side - 150.0f) * 0.03f;
++        cost += (side - 150.0f) * 0.01f;
+     }
+     if (g.hasAim) {
+         static const float kOffset[kSeats] = {-16.0f, 16.0f, -40.0f, 40.0f};
+         const float want = g.aimX + kOffset[seat & 3];
+-        cost += Min(Abs(x - want), 160.0f) * 0.02f;
++        cost += Min(Abs(x - want), 80.0f) * 0.40f;
+     }
+     for (int i = 0; i < g.items; ++i) {
+         const float d = Abs(x - g.itemX[i]);
+-        if (d < 56.0f) {
+-            cost -= g.itemW[i] * 0.25f * (1.0f - d / 56.0f);
++        if (d < 320.0f) {
++            cost -= g.itemW[i] * 5.0f * (1.0f - d / 320.0f);
+         }
+     }
+     if (g.partner) {
+@@ -983,7 +988,7 @@ void BuildNearLists(const PlayerView& pl)
+ 
+ float SafetyScore(float worst)
+ {
+-    return worst >= 0.0f ? Min(worst, 10.0f) * 6.0f : worst * 18.0f;
++    return worst >= 0.0f ? Min(worst, 10.0f) * 4.0f : worst * 12.0f;
+ }
+ 
+ struct PlanScore {
+@@ -1049,10 +1054,10 @@ float IntervalSafety(const Path& p, int k0, int k1, int skip, float worst, const
+ float PlanDanger(float x, float y)
+ {
+     const float side = 184.0f - Abs(x - kMidX);
+-    return DangerAt(x, y) * 2.0f + (side < 24.0f ? (24.0f - side) * 0.08f : 0.0f);
++    return DangerAt(x, y) * 1.0f + (side < 24.0f ? (24.0f - side) * 0.04f : 0.0f);
+ }
+ 
+-const float kTwoLegBelow = 4.0f;
++const float kTwoLegBelow = 20.0f;
+ const int kSplit = 4;
+ 
+ struct Plan {
+@@ -1196,7 +1201,13 @@ unsigned short Decide(unsigned frame, int seat, int lead)
+         for (int i = 1; i <= lead + 1 && !pressed; ++i) {
+             pressed = (m.history[(frame - static_cast<unsigned>(i)) % kHistory] & kBomb) != 0;
+         }
+-        return static_cast<unsigned short>(kShot | (!pressed && CanBomb(seat) ? kBomb : 0u));
++        const bool deathBomb = !pressed && CanBomb(seat);
++        if (deathBomb) {
++            char evt[160];
++            _snprintf_s(evt, sizeof(evt), _TRUNCATE, "BOT_DEATHBOMB seat=%d frame=%u", seat + 1, frame);
++            LogLine(evt);
++        }
++        return static_cast<unsigned short>(kShot | (deathBomb ? kBomb : 0u));
+     }
+     if (state != 1) {
+         return kShot;
+@@ -1263,8 +1274,22 @@ unsigned short Decide(unsigned frame, int seat, int lead)
+     m.lastGoalMode = world.boss ? 1 : (world.aim ? 2 : 0);
+     unsigned short out =
+         static_cast<unsigned short>(kShot | kDirBits[ActionDir(plan.action)] | (ActionFocus(plan.action) ? kFocus : 0u));
+-    if (lead >= 7 && plan.worst < -1.0f && (m.lastOutput & kBomb) == 0 && CanBomb(seat)) {
++    if (plan.worst < -3.0f && (m.lastOutput & kBomb) == 0 && CanBomb(seat)) {
+         out = static_cast<unsigned short>(out | kBomb);
++        {
++            char evt[160];
++            _snprintf_s(evt, sizeof(evt), _TRUNCATE, "BOT_BOMB seat=%d frame=%u worst=%.1f", seat + 1, frame, plan.worst);
++            LogLine(evt);
++        }
++    }
++    {
++        static unsigned lastDanger[kSeats] = {};
++        if (plan.worst < 0.0f && frame - lastDanger[seat] >= 120u) {
++            lastDanger[seat] = frame;
++            char evt[160];
++            _snprintf_s(evt, sizeof(evt), _TRUNCATE, "BOT_DANGER seat=%d frame=%u worst=%.1f", seat + 1, frame, plan.worst);
++            LogLine(evt);
++        }
+     }
+ 
+     const unsigned long long cycles = __rdtsc() - begin;
+@@ -1273,6 +1298,12 @@ unsigned short Decide(unsigned frame, int seat, int lead)
+     st.planCycles += cycles;
+     if (cycles > 15000000ull) {
+         ++st.slowPlans;
++        if ((frame % 60u) == 0u) {
++            char evt[160];
++            _snprintf_s(evt, sizeof(evt), _TRUNCATE, "BOT_SLOW seat=%d frame=%u cycles=%llu", seat + 1, frame,
++                        static_cast<unsigned long long>(cycles));
++            LogLine(evt);
++        }
+     }
+     if (cycles > st.planMaxCycles) {
+         st.planMaxCycles = cycles;
+diff --git a/src/th07/multi/MpConfig.cpp b/src/th07/multi/MpConfig.cpp
+index 973a940..9bea1e8 100644
+--- a/src/th07/multi/MpConfig.cpp
++++ b/src/th07/multi/MpConfig.cpp
+@@ -133,7 +133,7 @@ void InitConfig()
+     EnvList("TH07_MP_TEST_CHARACTERS", g_cfg.testCharacters, 0, 2);
+     EnvList("TH07_MP_TEST_SHOTTYPES", g_cfg.testShotTypes, 0, 1);
+     g_cfg.testStartStage = EnvInt("TH07_MP_TEST_START_STAGE", 1);
+-    if (g_cfg.testStartStage < 1 || g_cfg.testStartStage > 6) {
++    if (g_cfg.testStartStage < 1 || g_cfg.testStartStage > 8) {
+         g_cfg.testStartStage = 1;
+     }
+     int menuDelay = EnvInt("TH07_MP_MENU_INPUT_DELAY", 4);
+diff --git a/src/th07/multi/Session.cpp b/src/th07/multi/Session.cpp
+index a6927b2..0c3e15f 100644
+--- a/src/th07/multi/Session.cpp
++++ b/src/th07/multi/Session.cpp
+@@ -17,6 +17,7 @@
+ #include "GameWindow.hpp"
+ #include "Gui.hpp"
+ #include "Player.hpp"
++#include "ItemManager.hpp"
+ #include "Rng.hpp"
+ #include "Supervisor.hpp"
+ #include <stdio.h>
+@@ -181,9 +182,9 @@ void MpInitSession()
+     if (cfg.testKeepAlive) th07::mp::Log("TEST_KEEP_ALIVE enabled=1");
+     g_CoopViewSeat = cfg.mode == th07::mp::kUdp ? cfg.localSeat : 0;
+     if (th07::replay::Playing()) g_CoopViewSeat = th07::replay::ViewSeat();
+-    th07::mp::Log("SESSION mode=%s seat=%d players=%d rollback=%d delay=%u menu_delay=%u session=%08X",
++    th07::mp::Log("SESSION mode=%s seat=%d players=%d rollback=%d delay=%u menu_delay=%u session=%08X bot=%d",
+                   cfg.mode == th07::mp::kUdp ? "udp" : "local", cfg.localSeat, cfg.playerCount, cfg.rollback ? 1 : 0,
+-                  cfg.artificialDelay, cfg.menuInputDelay, cfg.sessionId);
++                  cfg.artificialDelay, cfg.menuInputDelay, cfg.sessionId, cfg.testBot ? 1 : 0);
+ }
+ 
+ void MpRequestShutdown()
+@@ -191,6 +192,33 @@ void MpRequestShutdown()
+     g_shutdown = true;
+ }
+ 
++static void GivePowerToBot(int seat)
++{
++    Player *self = &g_Players[seat];
++    if (IsGhost(self)) return;
++    f32 &power = g_GameManager.Power(seat);
++    if ((i32)power < 20) return;
++    int best = -1;
++    f32 bestD = 1e30f;
++    for (int other = 0; other < PlayerCount(); other++)
++    {
++        if (other == seat) continue;
++        Player *mate = &g_Players[other];
++        if (IsGhost(mate)) continue;
++        if ((i32)g_GameManager.Power(other) >= 128) continue;
++        f32 dx = mate->positionCenter.x - self->positionCenter.x;
++        f32 dy = mate->positionCenter.y - self->positionCenter.y;
++        f32 d = dx * dx + dy * dy;
++        if (d < bestD) { bestD = d; best = other; }
++    }
++    if (best < 0) return;
++    if (g_ItemManager.SpawnTransfer(&self->positionCenter, ITEM_POWER_SMALL, best, 20))
++    {
++        g_GameManager.AddSeatStock(power, -20);
++        th07::mp::Log("PLAYER_GIVE_POWER from=%d to=%d", seat, best);
++    }
++}
++
+ int MpRunHostTick(int *present)
+ {
+     *present = 0;
+@@ -213,8 +241,21 @@ int MpRunHostTick(int *present)
+         if (seat == 0)
+         {
+             buttons[seat] |= TitleBotMask(g_localFrame);
++            static int cPrev = 0;
++            int cNow = (GetAsyncKeyState('C') & 0x8000) != 0;
++            if (cNow && !cPrev)
++            {
++                GivePowerToBot(0);
++            }
++            cPrev = cNow;
++        }
++        static int botCoversHost = -1;
++        if (botCoversHost < 0)
++        {
++            char v[8] = {};
++            botCoversHost = GetEnvironmentVariableA("TH07_MP_BOT_P1", v, sizeof(v)) > 0 && v[0] == '1';
+         }
+-        if (cfg.testBot && Playing())
++        if (cfg.testBot && Playing() && (seat != cfg.localSeat || botCoversHost))
+         {
+             buttons[seat] = SessionBotMask(seat);
+         }
+@@ -264,12 +305,86 @@ int SessionRunFrame(const unsigned short *held, int count, int draw)
+     return RunFrame(buttons, count, draw);
+ }
+ 
++static unsigned short SupportMask(int seat, unsigned frame)
++{
++    static int supportEnabled = -1;
++    if (supportEnabled < 0)
++    {
++        char v[8] = {};
++        supportEnabled = GetEnvironmentVariableA("TH07_MP_BOT_SUPPORT", v, sizeof(v)) > 0 && v[0] == '1';
++    }
++    if (!supportEnabled) return 0;
++    Player *self = &g_Players[seat];
++    if (IsGhost(self)) return 0;
++    const int lives = (int)g_GameManager.Lives(seat);
++    if ((frame % 60u) == 0u)
++    {
++        float d0 = 99999.0f;
++        int ghost0 = -1;
++        if (PlayerCount() > 1)
++        {
++            float dx = g_Players[0].positionCenter.x - self->positionCenter.x;
++            float dy = g_Players[0].positionCenter.y - self->positionCenter.y;
++            d0 = dx * dx + dy * dy;
++            ghost0 = IsGhost(&g_Players[0]);
++        }
++        th07::mp::Log("SUPPORT seat=%d lives=%d ghost0=%d d0=%.1f", seat, lives, ghost0, d0);
++    }
++    // High priority: revive a ghost teammate while we still have spare lives.
++    if (lives > 1)
++    {
++        for (int other = 0; other < PlayerCount(); other++)
++        {
++            if (other == seat) continue;
++            Player *mate = &g_Players[other];
++            if (!IsGhost(mate)) continue;
++            float dx = mate->positionCenter.x - self->positionCenter.x;
++            float dy = mate->positionCenter.y - self->positionCenter.y;
++            if (dx * dx + dy * dy > 24.0f * 24.0f)
++            {
++                unsigned out = 0;
++                if (dx > 4.0f) out |= TH_BUTTON_RIGHT; else if (dx < -4.0f) out |= TH_BUTTON_LEFT;
++                if (dy > 4.0f) out |= TH_BUTTON_DOWN; else if (dy < -4.0f) out |= TH_BUTTON_UP;
++                return (unsigned short)out;
++            }
++            // In range: release shot and hold focus for the 90-frame transfer.
++            return (unsigned short)TH_BUTTON_FOCUS;
++        }
++    }
++    // Lower priority: hand power to a teammate who is short.
++    if ((int)g_GameManager.Power(seat) >= 60)
++    {
++        for (int other = 0; other < PlayerCount(); other++)
++        {
++            if (other == seat) continue;
++            Player *mate = &g_Players[other];
++            if (IsGhost(mate) || (int)g_GameManager.Power(other) >= 100) continue;
++            float dx = mate->positionCenter.x - self->positionCenter.x;
++            float dy = mate->positionCenter.y - self->positionCenter.y;
++            if (dx * dx + dy * dy > 24.0f * 24.0f)
++            {
++                unsigned out = 0;
++                if (dx > 4.0f) out |= TH_BUTTON_RIGHT; else if (dx < -4.0f) out |= TH_BUTTON_LEFT;
++                if (dy > 4.0f) out |= TH_BUTTON_DOWN; else if (dy < -4.0f) out |= TH_BUTTON_UP;
++                return (unsigned short)out;
++            }
++            return (unsigned short)((frame % 4u) < 2u ? TH_BUTTON_SHOOT : 0);
++        }
++    }
++    return 0;
++}
++
+ unsigned short SessionBotMask(int seat)
+ {
+     if (!Playing())
+     {
+         return 0;
+     }
++    unsigned short support = SupportMask(seat, g_localFrame);
++    if (support != 0)
++    {
++        return support;
++    }
+     const th07::mp::Config &cfg = th07::mp::Cfg();
+     if (cfg.testGive == seat + 1)
+     {
+@@ -315,7 +430,13 @@ unsigned short SessionLocalInput(bool gameplay)
+ {
+     const th07::mp::Config &cfg = th07::mp::Cfg();
+     unsigned buttons = LocalDeviceButtons(cfg.localSeat) | TitleBotMask(g_localFrame);
+-    if (cfg.testBot && gameplay && Playing())
++    static int botCoversHost = -1;
++    if (botCoversHost < 0)
++    {
++        char v[8] = {};
++        botCoversHost = GetEnvironmentVariableA("TH07_MP_BOT_P1", v, sizeof(v)) > 0 && v[0] == '1';
++    }
++    if (cfg.testBot && gameplay && Playing() && botCoversHost)
+     {
+         buttons = SessionBotMask(cfg.localSeat);
+     }
