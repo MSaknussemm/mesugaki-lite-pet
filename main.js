@@ -1,11 +1,13 @@
 const {app,BrowserWindow,ipcMain,Menu,Tray,nativeImage,screen,globalShortcut,dialog,shell}=require('electron');
 const fs=require('fs'),path=require('path'),http=require('http');
+const {execFile}=require('child_process');
+const {zoomBounds,gamePresence}=require('./interaction');
 const {Tail,eventFromLine,normalize}=require('./core');
 const root=__dirname,config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
 try{const t=fs.readFileSync(path.join(root,'idle-lines.txt'),'utf8').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);if(t.length){config.idle=config.idle||{};config.idle.lines=t;}}catch(e){}
 if(config.hardware_acceleration!==true){app.disableHardwareAcceleration();app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');}
-let win,tray,server,timer,busy=false,ready=false,watchdog,pass=false,queue=[],last=new Map(),report={},lastSession='',sessionSeq=0,seen=new Set(),lastGameEventAt=0,serverError=null,gameRunning=false;
-let menuOpen=false, currentMenu=null, menuOpenedAt=0;
+let win,tray,server,timer,busy=false,ready=false,watchdog,pass=false,queue=[],last=new Map(),report={},lastSession='',sessionSeq=0,seen=new Set(),lastGameEventAt=0,serverError=null,gameRunning=false,processTimer,checkingProcess=false,cursorTimer;
+let menuOpen=false, currentMenu=null;
 function raiseTop(){if(!win||win.isDestroyed())return;try{win.setAlwaysOnTop(true,'screen-saver');win.moveTop();}catch(e){}}
 function logPet(msg){try{const f=path.join(root,'pet.log');if(fs.existsSync(f)&&fs.statSync(f).size>102400)fs.writeFileSync(f,'');fs.appendFileSync(f,new Date().toISOString()+' '+msg+'\n');}catch(e){}}
 const cooldowns={PLAYER_DIE:3000,GHOST:3000,GHOST_REVIVE:3000,AUTO_REVIVE:3000,GAME_END:3000,GAME_OVER:3000,SESSION_END:3000,BOT_MISS:4000,BOT_HIT:5000,BOT_DEATHBOMB:5000,BOT_BOMB:5000,PLAYER_BOMB:5000,BOT_DANGER:10000,BOT_SLOW:10000};
@@ -13,7 +15,12 @@ const priorities={PLAYER_DIE:100,GHOST:95,GHOST_REVIVE:95,AUTO_REVIVE:95,GAME_EN
 if(!app.requestSingleInstanceLock()) app.quit();
 else app.whenReady().then(()=>{
  const area=screen.getPrimaryDisplay().workArea;
+ // game_dir 可以是绝对路径，也可以是相对本程序目录的路径（便于整包搬移）
+ const gameDir=path.isAbsolute(config.game_dir)?config.game_dir:path.join(root,config.game_dir);
  win=new BrowserWindow({width:480,height:480,x:area.x+Math.max(0,area.width-650),y:area.y+Math.max(0,area.height-540),transparent:true,frame:false,resizable:false,hasShadow:false,alwaysOnTop:true,skipTaskbar:true,focusable:false,show:false,webPreferences:{preload:path.join(root,'preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+ setMousePass(true);
+ cursorTimer=setInterval(probeCursor,50);
+ win.webContents.on('render-process-gone',()=>{ready=false;setMousePass(true);});
  raiseTop();
  setInterval(()=>{if(!menuOpen)raiseTop();},2000);
  win.on('show',raiseTop);
@@ -23,14 +30,14 @@ else app.whenReady().then(()=>{
  
  server=http.createServer((req,res)=>{
   const send=(code,data)=>{res.writeHead(code,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
-  if(req.method==='GET'&&req.url==='/health') return send(200,{ok:true,queued:queue.length,busy,report,animations:Object.keys(config.animations),game_dir:config.game_dir,serverError,window:win?{bounds:win.getBounds(),content:win.getContentSize(),scaleFactor:screen.getPrimaryDisplay().scaleFactor,workArea:screen.getPrimaryDisplay().workArea}:null});
+  if(req.method==='GET'&&req.url==='/health') return send(200,{ok:true,queued:queue.length,busy,report,animations:Object.keys(config.animations),game_dir:gameDir,serverError,window:win?{bounds:win.getBounds(),content:win.getContentSize(),scaleFactor:screen.getPrimaryDisplay().scaleFactor,workArea:screen.getPrimaryDisplay().workArea}:null});
   if(req.method!=='POST'||req.url!=='/message') return send(404,{error:'POST /message'});
   if(req.headers.origin) return send(403,{error:'仅允许本机程序调用'});
   let raw='',size=0;req.on('data',chunk=>{size+=chunk.length;if(size>8192) req.destroy();else raw+=chunk;});
   req.on('end',()=>{try {const msg=normalize(JSON.parse(raw),config);if(busy||queue.length)return send(429,{error:'正在说，说完再发'});enqueue(msg);send(202,{ok:true});}catch(e){send(400,{error:e.message});}});
  });
  server.on('error',e=>{serverError=e.message;try{fs.appendFileSync(path.join(root,'pet.log'),new Date().toISOString()+' server error: '+e.message+'\n');}catch(x){}});server.listen(config.port,'127.0.0.1');scheduleIdle();
- const tails=['mp_log.txt','bot_log.txt'].map(f=>new Tail(path.join(config.game_dir,f)));
+ const tails=['mp_log.txt','bot_log.txt'].map(f=>new Tail(path.join(gameDir,f)));
  function processLine(line,backfill){
   const sm=line.match(/^SESSION .*session=([0-9A-Fa-f]+)/);if(sm){lastSession=sm[1]+'#'+(++sessionSeq);return;}
   const event=eventFromLine(line);
@@ -46,6 +53,22 @@ else app.whenReady().then(()=>{
   last.set(event,now);enqueue(normalize({event},config));
  }
  tails.forEach(t=>{let recent=false;try{recent=Date.now()-fs.statSync(t.file).mtimeMs<300000;}catch(e){}const lines=t.read().filter(Boolean);if(recent)lines.slice(-10).forEach(line=>processLine(line,true));});
+ // Match the configured game executable, not any same-named game on the machine.
+ let expectedGame=path.join(gameDir,'th07_multi.exe');
+ try{expectedGame=fs.realpathSync.native(expectedGame);}catch(e){}
+ const powershell=path.join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
+ processTimer=setInterval(()=>{
+  if(!gameRunning||checkingProcess)return;
+  checkingProcess=true;
+  const observedSession=sessionSeq;
+  execFile(powershell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(root,'game-processes.ps1')],{windowsHide:true,timeout:8000,encoding:'utf8'},(error,stdout)=>{
+   checkingProcess=false;
+   if(error||observedSession!==sessionSeq)return;
+   try{
+    if(gamePresence(JSON.parse(stdout.replace(/^\uFEFF/,'')),expectedGame)===false){gameRunning=false;logPet('configured game process ended; idle restored');}
+   }catch(e){logPet('process check: '+e.message);}
+  });
+ },10000);
  timer=setInterval(()=>{for(const t of tails)for(const line of t.read())processLine(line);},200);
 });
 function scheduleIdle(){
@@ -68,13 +91,13 @@ function enqueue(msg){if(busy||queue.length)return false;msg.priority=priorities
 function pump(){if(!ready||busy||!queue.length)return;busy=true;win.webContents.send('message',queue.shift());watchdog=setTimeout(finish,25000);}
 function finish(){clearTimeout(watchdog);busy=false;pump();}
 function applyZoom(z){
+ if(!Number.isFinite(z))return;
+ z=Math.max(0.25,Math.min(1.5,z));
  const b=win.getBounds();
- const w=Math.max(120,Math.round(480*z)), h=Math.max(120,Math.round(480*z));
- const wa=screen.getPrimaryDisplay().workArea;
- const x=Math.min(Math.max(wa.x,b.x),wa.x+wa.width-w);
- const y=Math.min(Math.max(wa.y,b.y),wa.y+wa.height-h);
- win.setContentSize(w,h);
- win.setPosition(x,y);
+ const wa=screen.getDisplayMatching(b).workArea;
+ const next=zoomBounds(b,wa,z);
+ win.setBounds(next);
+ probeCursor();
  win.webContents.executeJavaScript('document.documentElement.style.setProperty("--zoom","'+z+'");document.documentElement.style.setProperty("--bubble-display","block");document.documentElement.style.setProperty("--bubble-arrow","block");').catch(()=>{});
  try{if(fs.existsSync(path.join(root,'zoom.log'))&&fs.statSync(path.join(root,'zoom.log')).size>102400)fs.writeFileSync(path.join(root,'zoom.log'),'');fs.appendFileSync(path.join(root,'zoom.log'),new Date().toISOString()+' z='+z+' content='+JSON.stringify(win.getContentSize())+' bounds='+JSON.stringify(win.getBounds())+'\n');}catch(e){}
 }
@@ -85,39 +108,55 @@ function applyThrottledZoom(z){
  if(zoomTimer)return;
  zoomTimer=setTimeout(()=>{zoomTimer=null;applyZoom(pendingZoom);},80);
 }
-function togglePass(){pass=!pass;win.setIgnoreMouseEvents(pass,{forward:true});updateMenu();}
+function setMousePass(ignore){
+ if(!win||win.isDestroyed())return;
+ const next=menuOpen?false:!!ignore;
+ if(pass===next)return;
+ win.setIgnoreMouseEvents(next,{forward:true});pass=next;
+}
+function probeCursor(){
+ if(!ready||!win||win.isDestroyed()||menuOpen)return;
+ const cursor=screen.getCursorScreenPoint(),b=win.getContentBounds();
+ win.webContents.send('cursor',{x:cursor.x-b.x,y:cursor.y-b.y});
+}
+function menuClosed(menu){
+ if(currentMenu!==menu)return;
+ currentMenu=null;menuOpen=false;
+ if(win&&!win.isDestroyed()){
+  win.setFocusable(false);setMousePass(true);probeCursor();raiseTop();
+ }
+}
 function updateMenu(){const m=Menu.buildFromTemplate([
  {label:'动画演示',submenu:Object.keys(config.animations).map(name=>({label:name,click:()=>enqueue(normalize({silent:true,animation:name},config))}))},
  {label:'打开空闲台词文件',click:()=>{const f=path.join(root,'idle-lines.txt');if(!fs.existsSync(f))fs.writeFileSync(f,'', 'utf8');shell.openPath(f);}},
  {label:'选择游戏目录',click:async()=>{const r=await dialog.showOpenDialog({properties:['openDirectory']});if(!r.canceled){config.game_dir=r.filePaths[0];fs.writeFileSync(path.join(root,'config.json'),JSON.stringify(config,null,2),'utf8');dialog.showMessageBox({message:'已保存游戏目录，重启桌宠后生效'});}}},
- {label:'缩放',submenu:[0.25,0.5,0.75,1,1.25].map(z=>({label:Math.round(z*100)+'%',click:()=>applyZoom(z)}))},
- {type:'separator'},{label:'退出',click:()=>app.quit()}]);tray?.setContextMenu(m);return m;}
+ {label:'缩放',submenu:[0.25,0.5,0.75,1,1.25,1.5].map(z=>({label:Math.round(z*100)+'%',click:()=>applyZoom(z)}))},
+ {type:'separator'},{label:'退出',click:()=>app.quit()}]);
+ m.on('menu-will-show',()=>{currentMenu=m;menuOpen=true;setMousePass(false);});
+ m.on('menu-will-close',()=>menuClosed(m));
+ tray?.setContextMenu(m);return m;
+}
 ipcMain.on('ready',()=>{win.webContents.send('config',config);ready=true;pump();});
 ipcMain.on('done',finish);ipcMain.on('report',(_,v)=>report=v);ipcMain.on('zoom',(_,z)=>applyThrottledZoom(z));
-ipcMain.on('menu',()=>{
-  try{
-    if(currentMenu){try{currentMenu.closePopup(win);}catch(e){}currentMenu=null;}
-    menuOpen=true; menuOpenedAt=Date.now();
-    // 原生菜单需要窗口真正被激活，否则点外面/按 ESC 都关不掉，会一直盖在角色上
-    try{win.setFocusable(true);win.show();win.focus();}catch(e){}
-    currentMenu=updateMenu();
-    currentMenu.popup({window:win,callback:()=>{
-      menuOpen=false; currentMenu=null;
-      try{win.setFocusable(false);}catch(e){}
-      try{raiseTop();}catch(e){}
-    }});
-  }catch(e){menuOpen=false;currentMenu=null;logPet('menu error: '+(e&&e.stack||e));}
+ipcMain.on('interactive',(event,active)=>{
+ if(event.sender!==win?.webContents||typeof active!=='boolean')return;
+ setMousePass(!active);
 });
-// 菜单卡死的兜底：10 秒还没关就强关
-setInterval(()=>{
-  if(menuOpen&&Date.now()-menuOpenedAt>10000){
-    try{currentMenu&&currentMenu.closePopup(win);}catch(e){}
-    menuOpen=false;currentMenu=null;
-    try{win.setFocusable(false);}catch(e){}
-    logPet('menu stuck: force closed');
-  }
-},2000);
+ipcMain.on('menu',()=>{
+ if(menuOpen)return;
+ let menu;
+ try{
+  setMousePass(false);
+  win.setFocusable(true);win.show();win.focus();
+  menu=updateMenu();currentMenu=menu;menuOpen=true;
+  menu.popup({window:win,callback:()=>menuClosed(menu)});
+ }catch(e){
+  if(menu&&currentMenu===menu)menuClosed(menu);
+  else{menuOpen=false;currentMenu=null;win.setFocusable(false);setMousePass(true);}
+  logPet('menu error: '+(e&&e.stack||e));
+ }
+});
 ipcMain.on('move',(_,v)=>{if(pass||!Number.isFinite(v.dx)||!Number.isFinite(v.dy))return;const [x,y]=win.getPosition();win.setPosition(x+Math.round(v.dx),y+Math.round(v.dy));});
-app.on('will-quit',()=>{clearInterval(timer);clearTimeout(watchdog);server?.close();globalShortcut.unregisterAll();});
+app.on('will-quit',()=>{clearInterval(timer);clearInterval(processTimer);clearInterval(cursorTimer);clearTimeout(watchdog);server?.close();globalShortcut.unregisterAll();});
 process.on('uncaughtException',e=>logPet('uncaught: '+(e&&e.stack||e)));
 process.on('unhandledRejection',e=>logPet('unhandledRejection: '+(e&&e.stack||e)));

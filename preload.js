@@ -1,5 +1,7 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('pet', {
+ interactive:active=>ipcRenderer.send('interactive',active),
+ onCursor:fn=>ipcRenderer.on('cursor',(_,v)=>fn(v)),
  ready:()=>ipcRenderer.send('ready'),
  onConfig:fn=>ipcRenderer.on('config',(_,v)=>fn(v)),
  onMessage:fn=>ipcRenderer.on('message',(_,v)=>fn(v)),

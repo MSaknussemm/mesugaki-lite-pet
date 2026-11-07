@@ -1,6 +1,6 @@
 {
   "port": 17837,
-  "game_dir": "C:\\\\path\\\\to\\\\th07_multi_player-main\\\\build",
+  "game_dir": "..\\game",
   "animations": {
     "idle": "assets/idle.webm",
     "talk": "assets/talk.webm",
