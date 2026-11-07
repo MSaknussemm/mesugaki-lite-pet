@@ -107,6 +107,11 @@ GAME_END  GAME_OVER  CONTINUE  SESSION_END
 
 本项目与上海爱丽丝幻乐团 / ZUN 无关，是玩家自制工具。
 
+## 相关
+
+- **配套游戏改版（AI 联机包）**：[`MSaknussemm/ai-coop-pack`](https://github.com/MSaknussemm/ai-coop-pack)
+  —— 妖妖梦联机 mod 的 P2 bot 版源码 + 编译好的 exe + 启动脚本（不含游戏数据）
+
 ## 致谢
 
 - 动画素材与运行方式参考：[`PC2005-cloud/dsh-pet`](https://github.com/PC2005-cloud/dsh-pet)、[`MerZlin/dsh-pet-indesktop`](https://github.com/MerZlin/dsh-pet-indesktop)（MIT）
