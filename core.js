@@ -1,10 +1,27 @@
-const fs = require('fs');
+const fs = require('fs'), path = require('path');
 class Tail {
-  constructor(file) { this.file=file; this.pos=0; this.pending=''; this.initial=true; this.signature=''; }
+  constructor(file, fromStart=false) { this.file=file; this.pos=0; this.pending=''; this.initial=!fromStart; this.signature=''; }
   read() {
     try {
       const stat=fs.statSync(this.file), sig=String(stat.birthtimeMs);
-      if(this.initial) { this.pos=stat.size; this.signature=sig; this.initial=false; try{const text=fs.readFileSync(this.file,'utf8');return text.split(/\r?\n/).slice(-50);}catch(e){return [];} }
+      if(this.initial) {
+        const data=fs.readFileSync(this.file);
+        const lines=data.toString('utf8').split(/\r?\n/);
+        this.pending=lines.pop();
+        this.pos=data.length;
+        this.initialMtime=stat.mtimeMs;
+        this.signature=sig;
+        this.initial=false;
+        // Keep only the session and lifecycle marker needed to restore state.
+        let session, lifecycle;
+        for(let i=lines.length-1;i>=0;i--){
+          const line=lines[i];
+          const event=eventFromLine(line);
+          if(event==='SESSION'){session=line;break;}
+          if(!lifecycle && (event==='STAGE_START'||event==='GAME_END'||event==='SESSION_END'||event==='GAME_OVER'))lifecycle=line;
+        }
+        return [session,lifecycle].filter(Boolean);
+      }
       if(stat.size<this.pos || sig!==this.signature) {this.pos=0;this.pending='';this.signature=sig;}
       if(stat.size===this.pos) return [];
       const fd=fs.openSync(this.file,'r');
@@ -13,6 +30,22 @@ class Tail {
       this.pos+=n; const lines=(this.pending+b.toString('utf8')).split(/\r?\n/); this.pending=lines.pop(); return lines;
     } catch(e) { if(e.code==='ENOENT') {this.initial=false;this.pos=0;this.pending='';} return []; }
   }
+}
+// The stock launcher gives each session a timestamped log when TH07_MP_LOG is unset.
+function latestSessionLog(dirs) {
+  let latest=null;
+  for(const dir of dirs){
+    let files;
+    try{files=fs.readdirSync(dir,{withFileTypes:true});}catch(e){continue;}
+    for(const file of files){
+      if(!file.isFile())continue;
+      const match=file.name.match(/^th07_coop_p\d+_(\d{8})_(\d{6})(?:_(\d{1,2}))?\.log$/i);
+      if(!match)continue;
+      const order=match[1]+match[2]+(match[3]||'1').padStart(2,'0');
+      if(!latest || order>latest.order)latest={file:path.join(dir,file.name),order};
+    }
+  }
+  return latest;
 }
 function eventFromLine(line) {
  const match=line.match(/^([A-Z][A-Z_]+)(?:\s|$)/); if(!match) return null;
@@ -31,4 +64,4 @@ function normalize(msg, config) {
  if(!Number.isFinite(duration)||duration<1000||duration>20000) throw Error('duration_ms 范围为 1000–20000');
  return {text,animation,duration_ms:duration,event:msg.event||'MESSAGE',silent};
 }
-module.exports={Tail,eventFromLine,normalize};
+module.exports={Tail,latestSessionLog,eventFromLine,normalize};
